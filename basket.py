@@ -1,3 +1,6 @@
+import os
+os.system("pip install --upgrade pip")
+os.system("pip install aiogram python-dotenv")
 import asyncio
 import aiogram
 from aiogram import Bot, Dispatcher, Router
@@ -20,13 +23,21 @@ router = Router()
 dp.include_router(router)
 
 stars = "XTR"
-bot_username = "basketball_casinobot" 
+bot_username = "basketball_casinobot"
 
 CHANNEL_LINK = "https://t.me/basket_channel_xdxd"
 CHANNEL_ID = -1004343401700
 ADMIN_ID = 5467012252
 
 BETS = {"bet_1": (1, 9), "bet_2": (2, 8), "bet_3": (3, 7), "bet_4": (4, 6)}
+
+# Соответствие значений слот-машины Telegram выигрышным комбинациям
+SLOTS_WINS = {
+    64: "7️⃣7️⃣7️⃣ (джекпот)",
+    43: "🍋🍋🍋 (три лимона)",
+    22: "🍇🍇🍇 (три винограда)",
+    1:  "🅱️🅱️🅱️ (три бара)",
+}
 
 # --- БД ---
 def init_db():
@@ -38,13 +49,12 @@ def init_db():
         referrer_id INTEGER,
         invited INTEGER DEFAULT 0,
         zayavka_sent INTEGER DEFAULT 0)""")
-    
-    # Проверяем, есть ли колонка free_ball_used
+
     cur.execute("PRAGMA table_info(users)")
     columns = [col[1] for col in cur.fetchall()]
     if "free_ball_used" not in columns:
         cur.execute("ALTER TABLE users ADD COLUMN free_ball_used INTEGER DEFAULT 0")
-    
+
     conn.commit()
     conn.close()
 
@@ -153,7 +163,7 @@ def game_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Баскетбол 🏀", callback_data="basket"), InlineKeyboardButton(text="Футбол ⚽(скоро)", callback_data="football")],
-            [InlineKeyboardButton(text="Слоты 🎰(скоро)", callback_data="slots")]
+            [InlineKeyboardButton(text="Слоты 🎰(новое!)", callback_data="slots")]
         ]
     )
 
@@ -169,7 +179,7 @@ async def sub_cheack(bot, user_id):
         print(f"Ошибка проверки подписки: {e}")
         return False
 
-# --- ХЕНДЛЕРЫ ОПЛАТЫ ---
+# --- ХЕНДЛЕРЫ ОПЛАТЫ БАСКЕТБОЛА ---
 @router.callback_query(F.data == "bet_1")
 async def pay_basket1(callback_query):
     await callback_query.answer()
@@ -218,7 +228,6 @@ async def free_ball_def(message: Message):
 @router.callback_query(F.data == "free_ball_menu")
 async def callback_free_ball_menu(callback_query):
     await callback_query.answer()
-    # Отправляем то же самое сообщение, что и в команде /free_ball
     await callback_query.message.answer(
         "Ты можешь получить 1 бесплатный бросок, подписавшись в наш новостной канал https://t.me/basket_channel_xdxd\n\n"
         "Подпишись на нас и нажми кнопку «Проверить подписку», чтобы получить бесплатный бросок",
@@ -229,29 +238,133 @@ async def callback_free_ball_menu(callback_query):
 async def callback_sub_check(callback_query, state: FSMContext):
     await callback_query.answer()
     user_id = callback_query.from_user.id
-    
+
     if has_used_free_ball(user_id):
         await callback_query.message.answer("❌ Вы уже использовали свой бесплатный бросок!")
-        return 
-    
+        return
+
     result = await sub_cheack(callback_query.bot, user_id)
     if result:
         await callback_query.message.answer("✅ Вы подписаны!")
         dice_free_ball = await callback_query.message.answer_dice(emoji="🏀")
         value = dice_free_ball.dice.value
-        
+
         if value >= 4:
-            set_used_free_ball(user_id) 
+            set_used_free_ball(user_id)
             await state.set_state(Form.username)
             await callback_query.message.answer(
                 "Поздравляю! Введите свой юзернейм чтобы я мог отправить подарок\n(Пример: @username)\n"
                 "Примечание: если вы измените username или введете несуществующий, я не смогу отправить подарок"
             )
         else:
-            set_used_free_ball(user_id) 
+            set_used_free_ball(user_id)
             await callback_query.message.answer("❌ Промах! Бесплатный мяч потрачен.")
     else:
         await callback_query.message.answer("❌ Вы не подписаны. Подпишитесь и попробуйте снова.")
+
+# --- СЛОТЫ ---
+@router.callback_query(F.data == "slots")
+async def slots_menu(callback_query):
+    await callback_query.answer()
+    text = (
+        "🎰 **Игра «Слоты»**\n\n"
+        "Один прокрут стоит **8 ⭐**.\n\n"
+        "**Выигрышные комбинации (3 в ряд):**\n"
+        "если выбьешь  7️⃣7️⃣7️⃣ — получишь 50 звезд\n"
+        "если выбьешь 🍋🍋🍋 — получишь 25 звезд\n"
+        "если выбьешь 🍇🍇🍇 — получишь 25 звезд\n"
+        "если выбьешь 🅱️🅱️🅱️ (3 бара) — получишь 25 звезд\n\n"
+        "Всё остальное — проигрыш."
+    )
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Купить прокрут за 8⭐", callback_data="slots_pay")]]
+    )
+    await callback_query.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+
+@router.callback_query(F.data == "slots_pay")
+async def slots_pay(callback_query):
+    await callback_query.answer()
+    prices = [LabeledPrice(label="Прокрут слотов", amount=8)]
+    await callback_query.message.answer_invoice(
+        title="Прокрут слотов 🎰",
+        description="Один прокрут слот-машины",
+        prices=prices,
+        provider_token="",
+        payload="slots_spin",
+        currency="XTR",
+        reply_markup=get_keyboard()
+    )
+
+async def spin_slots_logic(message: Message, state: FSMContext):
+    """Крутит слоты один раз. Вызывается после успешной оплаты."""
+    dice_msg = await message.answer_dice(emoji="🎰")
+    value = dice_msg.dice.value
+
+    # Любая комбинация 3 в ряд = выигрыш — просим юз
+    if value in SLOTS_WINS:
+        combo = SLOTS_WINS[value]
+        await state.update_data(slots_combo=combo)
+        await state.set_state(Form.slots_username)
+        await message.answer(
+            f"🎉 **Поздравляем! Вы выбили {combo}!**\n\n"
+            "Введите ваш юзернейм (например, `@username`), чтобы получить приз:",
+            parse_mode="Markdown"
+        )
+        return
+
+    # Всё остальное — проигрыш
+    await message.answer("😢 **Проигрыш.** Попробуйте ещё раз!")
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Крутить ещё за 8⭐", callback_data="slots_pay")]]
+    )
+    await message.answer("Хотите крутить ещё?", reply_markup=kb)
+
+@router.message(Form.slots_username, F.text)
+async def slots_username_handler(message: Message, state: FSMContext):
+    username_text = message.text.strip()
+    if not username_text.startswith("@"):
+        await message.answer("❌ Введите корректный юзернейм, начинающийся с `@`:")
+        return
+
+    data = await state.get_data()
+    combo = data.get("slots_combo", "неизвестно")
+
+    await message.answer("✅ Отлично! Ваш выигрыш зафиксирован. Ожидайте подарок.")
+
+    await message.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=(
+            f"🎰 **Выигрыш в слотах!**\n"
+            f"Игрок: {message.from_user.full_name}\n"
+            f"ID: {message.from_user.id}\n"
+            f"Комбинация: {combo}\n"
+            f"Юз для подарка: {username_text}"
+        ),
+        parse_mode="Markdown"
+    )
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Крутить ещё за 8⭐", callback_data="slots_pay")]]
+    )
+    await message.answer("Хотите испытать удачу ещё раз?", reply_markup=kb)
+    await state.clear()
+
+@router.message(Command("slots"))
+async def slots_command(message: Message):
+    text = (
+        "🎰 **Игра «Слоты»**\n\n"
+        "Один прокрут стоит **8 ⭐**.\n\n"
+        "**Выигрышные комбинации (3 в ряд):**\n"
+        "7️⃣7️⃣7️⃣ — джекпот\n"
+        "🍋🍋🍋 — три лимона\n"
+        "🍇🍇🍇 — три винограда\n"
+        "🅱️🅱️🅱️ — три бара\n\n"
+        "Всё остальное — проигрыш."
+    )
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Купить прокрут за 8⭐", callback_data="slots_pay")]]
+    )
+    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
 
 # --- ОСТАЛЬНЫЕ ХЕНДЛЕРЫ ---
 @router.callback_query(F.data == "give_link")
@@ -269,17 +382,17 @@ async def bot_start_button(message: Message, state: FSMContext):
 async def about_key(message: Message, state: FSMContext):
     await state.clear()
     await about_func(message, state)
-    
+
 @router.message(F.text == "Выбрать игру")
 async def select_key(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("🎮 Выбери игру:", reply_markup=game_keyboard())    
+    await message.answer("🎮 Выбери игру:", reply_markup=game_keyboard())
 
 @router.message(F.text == "Поддержать звёздами")
 async def donate_key(message: Message, state: FSMContext):
     await state.clear()
     await quantity_func(message, state)
-    
+
 @router.message(F.text == "Реферальная система")
 async def button_ref(message: Message, state: FSMContext):
     await ref_func(message, state)
@@ -288,20 +401,20 @@ async def button_ref(message: Message, state: FSMContext):
 async def callback_play(callback_query):
     await callback_query.answer()
     await callback_query.message.answer("🎮 Выбери игру:", reply_markup=game_keyboard())
-    
+
 @router.callback_query(F.data == "basket")
 async def basket_game(callback_query):
     await callback_query.answer()
     await callback_query.message.answer(
         "Игра баскетбол 🏀\nПравила игры:\nВы покупаете количество бросков за звёзды, чем меньше мячей - тем больше шанс выиграть\n"
-        "Если все мячи попали - вы выигрываете 15 звезд", 
+        "Если все мячи попали - вы выигрываете 15 звезд",
         reply_markup=price_keyboard()
     )
-   
+
 @router.callback_query(F.data == "donate")
 async def don_inline(callback_query, state: FSMContext):
     await quantity_func(callback_query.message, state)
-    
+
 @router.callback_query(F.data == "about_bot")
 async def callback_about(callback_query, state: FSMContext):
     await callback_query.answer()
@@ -318,10 +431,10 @@ async def start_com(message: Message, state: FSMContext):
             referrer_id = int(parts[1][4:])
         except ValueError:
             referrer_id = None
-        
+
     if referrer_id == user_id:
         referrer_id = None
-        
+
     add_user(user_id, username, referrer_id)
     await state.clear()
     await message.answer(
@@ -354,8 +467,8 @@ async def quantity_func(message: Message, state: FSMContext):
         "Введите пожалуйста количество звезд, которое хотели бы отправить (пример: 50), если передумаете - пропишите /start"
     )
     await state.set_state(Form.quantity)
-    
-@router.message(Form.quantity, F.text)    
+
+@router.message(Form.quantity, F.text)
 async def check(message: Message, state: FSMContext):
     try:
         amount = int(message.text)
@@ -366,7 +479,7 @@ async def check(message: Message, state: FSMContext):
     await message.answer_invoice(
         title="Поддержка донатом", description="Поддержать бота", prices=prices,
         provider_token="", payload="channel_support", currency="XTR", reply_markup=get_keyboard()
-    )    
+    )
     await state.clear()
 
 @router.message(Command("select"), StateFilter("*"))
@@ -385,7 +498,8 @@ async def help_com(message: Message, state: FSMContext):
         "<b>/donate</b> - Поддержать бота звёздами\n"
         "<b>/select</b> - Выбор игры\n"
         "<b>/free_ball</b> - Получить 1 бесплатный бросок за подписку\n"
-        "<b>/referal</b> - Заработать звёзды с реферальной системой",
+        "<b>/referal</b> - Заработать звёзды с реферальной системой\n"
+        "<b>/slots</b> - Игра «Слоты» (8⭐ за прокрут)",
         parse_mode="HTML", reply_markup=osn_keyboard()
     )
 
@@ -426,9 +540,11 @@ async def succ_pay(message: Message, state: FSMContext):
                             await message.bot.send_message(referrer_id, "🎉 Ещё 3 реферала — заявка отправлена!\nЖди 15⭐ до 2 дней")
                         except Exception:
                             pass
-                        
+
     if payload == "channel_support":
         await message.answer("Спасибо за донат!")
+    elif payload == "slots_spin":
+        await spin_slots_logic(message, state)
     elif payload == "bet_1":
         value1 = await message.answer_dice(emoji="🏀")
         if value1.dice.value >= 4:
@@ -443,7 +559,7 @@ async def succ_pay(message: Message, state: FSMContext):
             await state.set_state(Form.username)
             await message.answer("Поздравляю! Введите свой юзернейм чтобы я мог отправить подарок\n(Пример: @username)\nПримечание: если вы измените username или введете несуществующий, я не смогу отправить подарок")
         else:
-            await message.answer("Промах❌ Вы проиграли!")     
+            await message.answer("Промах❌ Вы проиграли!")
     elif payload == "bet_3":
         value30 = await message.answer_dice(emoji="🏀")
         value32 = await message.answer_dice(emoji="🏀")
@@ -459,11 +575,11 @@ async def succ_pay(message: Message, state: FSMContext):
         value42 = await message.answer_dice(emoji="🏀")
         value43 = await message.answer_dice(emoji="🏀")
         if value40.dice.value >= 4 and value41.dice.value >= 4 and value42.dice.value >= 4 and value43.dice.value >= 4:
-             await state.set_state(Form.username)
-             await message.answer("Поздравляю! Введите свой юзернейм чтобы я мог отправить подарок\n(Пример: @username)\nПримечание: если вы измените username или введете несуществующий, я не смогу отправить подарок")
+            await state.set_state(Form.username)
+            await message.answer("Поздравляю! Введите свой юзернейм чтобы я мог отправить подарок\n(Пример: @username)\nПримечание: если вы измените username или введете несуществующий, я не смогу отправить подарок")
         else:
             await message.answer("Промах❌ Вы проиграли!")
-            
+
 @router.message(Form.username, F.text)
 async def info_user(message: Message, state: FSMContext):
     username_text = message.text
@@ -474,7 +590,7 @@ async def info_user(message: Message, state: FSMContext):
     await message.answer("Отлично, ожидайте подарок. Он может придти как мгновенно, так и до 2-х дней")
     await message.bot.send_message(chat_id=ADMIN_ID, text=f"Выигрыш! юз-{username_text}")
     await state.clear()
-            
+
 @router.message(Command("about"), StateFilter("*"))
 async def about_func(message: Message, state: FSMContext):
     await state.clear()
@@ -495,3 +611,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
