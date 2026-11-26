@@ -17,7 +17,7 @@ import os
 load_dotenv()
 import sqlite3
 
-Token = os.getenv("Token")
+
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
