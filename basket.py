@@ -605,7 +605,8 @@ async def about_func(message: Message, state: FSMContext):
 
 async def main():
     init_db()
-    bot = Bot(token=Token)
+    bot = Bot(token=os.getenv("Token"))
+    
     print("start...")
     await dp.start_polling(bot)
 
